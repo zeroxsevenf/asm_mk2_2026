@@ -23,7 +23,7 @@ DSEG segment para public use16 'DATA'
 	str_prompt db "Enter expression (prefix '0x' for hex): ", 0
 	str_result db "Result: ", 0
 
-	strbuf db 256 dup(?)
+	strbuf db 256 dup(0)
 	numdec db 32 dup(?)
 	numhex db 32 dup(?)
 
@@ -34,15 +34,15 @@ DSEG segment para public use16 'DATA'
 	operation db 0
 
 	; error messages
-	err_invalid_num     db "Error: Invalid number", 13, 10, 0
-	err_invalid_op      db "Error: Invalid operation (use + - * / %)", 13, 10, 0
-	err_missing_op      db "Error: Missing operation", 13, 10, 0
-	err_missing_operand db "Error: Missing operand", 13, 10, 0
-	err_extra_tokens    db "Error: Extra characters after expression", 13, 10, 0
-	err_div_by_zero     db "Error: Division by zero", 13, 10, 0
-	err_overflow        db "Error: Signed overflow", 13, 10, 0
+	err_invalid_num     db 13, 10, "Error: Invalid number", 13, 10, 0
+	err_invalid_op      db 13, 10, "Error: Invalid operation (use + - * / %)", 13, 10, 0
+	err_missing_op      db 13, 10, "Error: Missing operation", 13, 10, 0
+	err_missing_operand db 13, 10, "Error: Missing operand", 13, 10, 0
+	err_extra_tokens    db 13, 10, "Error: Extra characters after expression", 13, 10, 0
+	err_div_by_zero     db 13, 10, "Error: Division by zero", 13, 10, 0
+	err_overflow        db 13, 10, "Error: Signed overflow", 13, 10, 0
 
-	temp_token db 64 dup(0)
+	temp_token db 256 dup(0)
 
 DSEG ends
 
@@ -320,9 +320,18 @@ _validate_and_prepare:
 	mov si, word ptr [bp + arg1]
 
 	; get num1
-	call __vp_skip_spaces
+	push si
+	call _skip_spaces
+	add sp, 2
+	mov si, ax
+
 	mov di, si
-	call __vp_find_token_end
+
+	push di
+	call _find_token_end
+	add sp, 2
+	mov si, ax
+
 	call __vp_extract_token
 	; check extract error
 	jc __vp_ret_err
@@ -341,7 +350,11 @@ _validate_and_prepare:
 	mov [num_one], ax
 
 	; get op
-	call __vp_skip_spaces
+	push si
+	call _skip_spaces
+	add sp, 2
+	mov si, ax
+
 	cmp byte ptr [si], 0
 	je __vp_fail_missing_op
 	mov al, byte ptr [si]
@@ -362,9 +375,18 @@ _validate_and_prepare:
 
 __vp_op_ok:
 	; get num2
-	call __vp_skip_spaces
+	push si
+	call _skip_spaces
+	add sp, 2
+	mov si, ax
+
 	mov di, si
-	call __vp_find_token_end
+
+	push di
+	call _find_token_end
+	add sp, 2
+	mov si, ax
+
 	call __vp_extract_token
 	jc __vp_ret_err
 
@@ -380,7 +402,11 @@ __vp_op_ok:
 	mov [num_two], ax
 
 	; check for junk
-	call __vp_skip_spaces
+	push si
+	call _skip_spaces
+	add sp, 2
+	mov si, ax
+
 	cmp byte ptr [si], 0
 	jne __vp_fail_extra
 
@@ -410,51 +436,75 @@ __vp_ret_err:
 	pop bp
 	ret
 
-__vp_skip_spaces:
+_skip_spaces:
+	push bp
+	mov bp, sp
+	push si
+	mov si, word ptr [bp + arg1]
+
+__ss_loop:
 	cmp byte ptr [si], ' '
-	je __vp_inc_si
+	je __ss_inc
 	cmp byte ptr [si], 9
-	je __vp_inc_si
+	je __ss_inc
+	mov ax, si
+	pop si
+	mov sp, bp
+	pop bp
 	ret
 
-__vp_inc_si:
+__ss_inc:
 	inc si
-	jmp __vp_skip_spaces
+	jmp __ss_loop
 
-__vp_find_token_end:
+_find_token_end:
+	push bp
+	mov bp, sp
+	push si
+	push di
+	mov di, word ptr [bp + arg1]
 	mov si, di
 
-__vp_fe_loop:
+__fe_loop:
 	cmp byte ptr [si], 0
-	je __vp_fe_done
+	je __fe_done
 	cmp byte ptr [si], ' '
-	je __vp_fe_done
+	je __fe_done
 	cmp byte ptr [si], 9
-	je __vp_fe_done
+	je __fe_done
 	cmp si, di
-	je __vp_fe_next
+	je __fe_next
 	cmp byte ptr [si], '+'
-	je __vp_fe_done
+	je __fe_done
 	cmp byte ptr [si], '-'
-	je __vp_fe_done
+	je __fe_done
 	cmp byte ptr [si], '*'
-	je __vp_fe_done
+	je __fe_done
 	cmp byte ptr [si], '/'
-	je __vp_fe_done
+	je __fe_done
 	cmp byte ptr [si], '%'
-	je __vp_fe_done
+	je __fe_done
 
-__vp_fe_next:
+__fe_next:
 	inc si
-	jmp __vp_fe_loop
+	jmp __fe_loop
 
-__vp_fe_done:
+__fe_done:
+	mov ax, si
+	pop di
+	pop si
+	mov sp, bp
+	pop bp
 	ret
 
 __vp_extract_token:
 	mov cx, si
 	sub cx, di
 	jz __vp_et_fail
+
+	cmp cx, 255
+	ja __vp_et_fail_len
+
 	mov bx, offset temp_token
 
 __vp_ex_loop:
@@ -469,6 +519,11 @@ __vp_ex_loop:
 
 __vp_et_fail:
 	mov ax, ERROR_MISSING_OPERAND
+	stc
+	ret
+
+__vp_et_fail_len:
+	mov ax, ERROR_OVERFLOW
 	stc
 	ret
 
@@ -619,8 +674,6 @@ __ua_h_pos:
 	jmp __ua_done
 
 __ua_h_pos_check:
-	cmp ax, 8000h
-	jae __ua_overflow
 	clc
 	jmp __ua_done
 
@@ -931,6 +984,10 @@ _getstr:
 	; check strip CRLF
 	cmp ax, 2
 	jb __gs_exit
+	mov di, bx
+	dec di
+	cmp byte ptr [di], 10
+	jne __gs_exit
 	sub bx, 2
 
 __gs_exit:
